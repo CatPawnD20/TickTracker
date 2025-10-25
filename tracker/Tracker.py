@@ -1,5 +1,6 @@
 ﻿# tracker/Tracker.py
 import time
+from datetime import datetime, timedelta
 import MetaTrader5 as mt5
 from tick.Tick import Tick
 from database.PostgreSQL import PostgreSQL
@@ -22,13 +23,24 @@ class Tracker:
 
     # ---- DB & MT5 setup ----
     def _init_db(self):
+        """Veritabanını hazırlar, partisyon fonksiyonunu kurar ve çalıştırır."""
         self.db = PostgreSQL()
         self.db.connect()
+
+        # Ana tablo ve default partisyonu garanti et
         self.db.ensure_tick_parent()
+
+        # Partisyon yönetimi etkinse fonksiyonu kur ve çalıştır
         if self.enable_partition_mgmt:
+            print(f"[PART] installing and managing partitions "
+                  f"(retention={self.retention_days}d, precreate={self.precreate_days}d)")
             self.db.install_manage_partitions()
             self.db.call_manage_partitions(self.retention_days, self.precreate_days)
-        print(f"[INIT] DB connected host={POSTGRES_CONFIG.get('host')} db={POSTGRES_CONFIG.get('dbname')}")
+        else:
+            print("[PART] partition management disabled by config")
+
+        print(f"[INIT] DB connected host={POSTGRES_CONFIG.get('host')} "
+              f"db={POSTGRES_CONFIG.get('dbname')}")
 
     def _init_mt5(self):
         ok = mt5.initialize(
@@ -51,9 +63,11 @@ class Tracker:
     # ---- Tick collection ----
     def _fetch_ticks(self):
         if self.last_msc is None:
-            start_ms = int((time.time() - 3) * 1000)
-            return mt5.copy_ticks_from(self.symbol, start_ms / 1000.0, 100000, mt5.COPY_TICKS_ALL)
-        return mt5.copy_ticks_from(self.symbol, self.last_msc / 1000.0, 100000, mt5.COPY_TICKS_ALL)
+            start_dt = datetime.utcnow() - timedelta(seconds=3)
+            return mt5.copy_ticks_from(self.symbol, start_dt, 100000, mt5.COPY_TICKS_ALL)
+        # last_msc -> UTC naive datetime
+        start_dt = datetime.utcfromtimestamp(self.last_msc / 1000.0)
+        return mt5.copy_ticks_from(self.symbol, start_dt, 100000, mt5.COPY_TICKS_ALL)
 
     # ---- Database write ----
     def _flush(self):
