@@ -52,6 +52,7 @@ TickTracker/
 ├── .env
 ├── env.example
 ├── requirements.txt
+├── README.en.md
 └── README.md (bu dosya)
 ```
 

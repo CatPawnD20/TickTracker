@@ -51,6 +51,7 @@ TickTracker/
 ├── dockerHelp.md
 ├── .env
 ├── env.example
+├── requirements.txt
 ├── README.md
 └── README.en.md (this file)
 ```
