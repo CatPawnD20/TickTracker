@@ -1,4 +1,5 @@
-﻿import time
+﻿# tracker/Tracker.py
+import time
 import MetaTrader5 as mt5
 from tick.Tick import Tick
 from database.PostgreSQL import PostgreSQL
@@ -14,16 +15,20 @@ class Tracker:
         self.poll_ms = TRACKER_CONFIG["poll_ms"]
         self.retention_days = TRACKER_CONFIG["retention_days"]
         self.precreate_days = TRACKER_CONFIG["precreate_days"]
+        self.enable_partition_mgmt = TRACKER_CONFIG.get("enable_partition_mgmt", True)
         self.buf = []
         self.last_msc: int | None = None
         self.db = None
 
     # ---- DB & MT5 setup ----
     def _init_db(self):
-        self.db = PostgreSQL(**POSTGRES_CONFIG)
+        self.db = PostgreSQL()
         self.db.connect()
         self.db.ensure_tick_parent()
-        self.db.call_manage_partitions(self.retention_days, self.precreate_days)
+        if self.enable_partition_mgmt:
+            self.db.install_manage_partitions()
+            self.db.call_manage_partitions(self.retention_days, self.precreate_days)
+        print(f"[INIT] DB connected host={POSTGRES_CONFIG.get('host')} db={POSTGRES_CONFIG.get('dbname')}")
 
     def _init_mt5(self):
         ok = mt5.initialize(
@@ -41,6 +46,8 @@ class Tracker:
             if not mt5.symbol_select(self.symbol, True):
                 raise RuntimeError(f"symbol_select failed: {self.symbol}")
 
+        print(f"[INIT] MT5 ready symbol={self.symbol} path={MT5_CONFIG.get('path')!r}")
+
     # ---- Tick collection ----
     def _fetch_ticks(self):
         if self.last_msc is None:
@@ -50,31 +57,39 @@ class Tracker:
 
     # ---- Database write ----
     def _flush(self):
-        if not self.buf:
+        n = len(self.buf)
+        if n == 0:
             return
         self.db.insert_ticks(self.buf)
         self.db.commit()
         self.buf.clear()
+        print(f"[FLUSH] wrote {n} ticks")
 
     # ---- Main loop ----
     def run(self):
         """Sürekli tick akışı başlatır."""
+        print(f"[START] symbol={self.symbol} batch_size={self.batch_size} poll_ms={self.poll_ms} "
+              f"retention={self.retention_days} precreate={self.precreate_days}")
         self._init_db()
         self._init_mt5()
-        point = mt5.symbol_info(self.symbol).point or 0.01
+        print("[RUN] tracking live ticks...")
 
         try:
             while True:
                 ticks = self._fetch_ticks()
-                if ticks:
+                if ticks is not None and ticks.size > 0:
                     ticks = sorted(ticks, key=lambda x: x.time_msc)
                     if self.last_msc is not None:
                         ticks = [t for t in ticks if t.time_msc > self.last_msc]
-                    if ticks:
+                    if len(ticks) > 0:
                         self.last_msc = ticks[-1].time_msc
                         for t in ticks:
-                            tk = Tick(self.symbol, t.bid, t.ask, t.last,
-                                      t.volume_real or t.volume, t.flags, t.time_msc, point)
+                            tk = Tick(
+                                self.symbol,
+                                t.bid, t.ask, t.last,
+                                t.volume_real or t.volume,
+                                t.flags, t.time_msc
+                            )
                             self.buf.append(tk.to_tuple())
 
                 if len(self.buf) >= self.batch_size:
@@ -83,9 +98,10 @@ class Tracker:
                 time.sleep(self.poll_ms / 1000.0)
 
         except KeyboardInterrupt:
-            pass
+            print("[EXIT] stopping by user")
         finally:
             self._flush()
             if self.db:
                 self.db.close()
             mt5.shutdown()
+            print("[EXIT] shutdown complete")

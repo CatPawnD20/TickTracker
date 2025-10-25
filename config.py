@@ -1,4 +1,5 @@
-﻿from dotenv import load_dotenv
+﻿# config.py
+from dotenv import load_dotenv
 import os
 
 load_dotenv(override=True)  # env güncellemeleri sırasında güvenli yükleme
@@ -37,6 +38,12 @@ TRACKER_CONFIG = {
     # Günlük partition yönetimi
     "retention_days": int(os.getenv("RETENTION_DAYS", 180)),   # kaç gün geriye saklanacak
     "precreate_days": int(os.getenv("PRECREATE_DAYS", 3)),     # kaç gün ileriye tablo oluşturulacak
+
+    # Partition yönetimi bayrağı
+    "enable_partition_mgmt": os.getenv("ENABLE_PARTITION_MGMT", "true").lower() == "true",
+
+    # (opsiyonel) flush_sec — sistem bütünlüğü için placeholder, kullanılmıyor
+    "flush_sec": int(os.getenv("FLUSH_SEC", 1)),
 }
 
 # --- Tick parametreleri ---
