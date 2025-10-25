@@ -4,7 +4,7 @@
 TickTracker, MetaTrader 5 (MT5) terminalinden gerçek zamanlı tick verisi alıp PostgreSQL'e yazmak üzere tasarlanmış bir akış işleyicisidir. `tracker/Tracker.py`, MT5 oturumunu açar, sembol görünürlüğünü doğrular ve her döngüde yeni tick'leri sıralı şekilde okur.【F:tracker/Tracker.py†L13-L122】 Toplanan ham kayıtlar `tick/Tick.py` sınıfında fiyat, hacim ve spread hesaplarıyla normalize edilir; veritabanına gönderilmeden önce UTC zaman damgasına dönüştürülür ve tuple formatına serilir.【F:tick/Tick.py†L5-L42】 Yazma tarafında `database/PostgreSQL.py`, ana tabloyu ve varsayılan partisyonu garanti eder, günlük partisyonlar için fonksiyonu yükler ve gerekirse `pg_cron` job'unu oluşturur.【F:database/PostgreSQL.py†L9-L200】【F:database/PostgreSQL.py†L200-L286】 Böylece MT5→Tracker→Tick→PostgreSQL hattı, partisyon yönetimi ve cron tetikleyicileri ile birlikte uçtan uca otomatikleşir.
 
 ## Yapılandırma Anahtarları
-Aşağıdaki ortam değişkenleri `.env` veya sistem ortamı üzerinden okunur (`config.py`).【F:config.py†L1-L58】
+Aşağıdaki ortam değişkenleri `.env` veya sistem ortamı üzerinden okunur (`config.py`).【F:config.py†L1-L58】 Depoya dahil edilen `.env.example` dosyasını kopyalayıp gerçek değerlerle doldurarak `.env` oluşturabilirsiniz; örnek dosyadaki tüm placeholder'lar sahte kimlik bilgileri içerir ve gerçek kurulumda değiştirilmelidir.
 
 | Grup | Anahtar | Açıklama |
 |------|---------|----------|
@@ -27,7 +27,7 @@ Docker ortamında PostgreSQL 16 + `pg_cron` çalıştırmak için `dockerHelp.md
 | `debug/check_pg_cron.py` | `pg_cron` job'unun varlığını ve durumunu sorgulamak. | Hedef job'u oluşturur/yoksa bildirir; cron schedule, komut ve aktiflik bilgilerini döker.【F:debug/check_pg_cron.py†L1-L60】 |
 
 ## Çalıştırma
-1. `.env` içinde gerekli MT5 ve PostgreSQL bilgilerini girin.
+1. `cp .env.example .env` komutuyla örnek ortam dosyasını kopyalayın ve gerekli MT5/PostgreSQL bilgilerini gerçek değerlerle güncelleyin.
 2. (Opsiyonel) Partisyon fonksiyonunu veritabanına yükleyin (`database/partitionManager.txt`).
 3. Uygulamayı `python run_tracker.py [SEMBOL]` komutuyla başlatın; sembol parametresi verilmezse `config.py` içerisindeki varsayılan kullanılır.【F:run_tracker.py†L1-L8】【F:tracker/Tracker.py†L13-L121】 `Tracker` yapılandırması, `RETENTION_DAYS`/`PRECREATE_DAYS` değerlerine göre partisyon fonksiyonunu çağırır ve `ENABLE_PARTITION_MGMT`/`ENABLE_PG_CRON` bayraklarıyla kontrol edilir.【F:tracker/Tracker.py†L13-L122】【F:config.py†L30-L49】
 
