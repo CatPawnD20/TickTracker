@@ -82,6 +82,53 @@ class PostgreSQL:
         print("[DB] rollback")
 
     # ---- domain helpers ----
+    def ensure_pg_cron_job(self, retention_days: int, precreate_days: int, cron_schedule: str) -> str:
+        """pg_cron eklentisini kurar ve partisyon yönetimi job'unu idempotent şekilde tanımlar."""
+        if not self.cur:
+            raise RuntimeError("cursor not initialized; call connect() first")
+
+        job_name = f"{self.schema}.{self.table}_manage_partitions"
+        command = f"SELECT public.manage_tick_log_partitions({int(retention_days)},{int(precreate_days)});"
+
+        print(f"[DB] ensuring pg_cron job name={job_name} schedule={cron_schedule}")
+
+        try:
+            self.execute("CREATE EXTENSION IF NOT EXISTS pg_cron;")
+
+            self.execute("SELECT jobid FROM cron.job WHERE jobname=%s;", (job_name,))
+            row = self.cur.fetchone()
+            job_id = row[0] if row else None
+
+            if job_id is not None:
+                print(f"[DB] pg_cron job exists (id={job_id}), updating schedule/command")
+                self.execute(
+                    "SELECT cron.alter_job(%s, schedule => %s, command => %s);",
+                    (job_id, cron_schedule, command),
+                )
+            else:
+                print("[DB] pg_cron job missing, creating new schedule")
+                try:
+                    self.execute(
+                        "SELECT cron.schedule_in_database(%s, %s, %s, %s);",
+                        (job_name, cron_schedule, command, self.cfg["dbname"]),
+                    )
+                except psycopg2.Error as e:
+                    if getattr(e, "pgcode", None) == "42883":
+                        print("[DB] cron.schedule_in_database unavailable, falling back to cron.schedule")
+                        self.execute(
+                            "SELECT cron.schedule(%s, %s, %s);",
+                            (job_name, cron_schedule, command),
+                        )
+                    else:
+                        raise
+
+            self.commit()
+        except psycopg2.Error:
+            self.rollback()
+            raise
+
+        return job_name
+
     def ensure_tick_parent(self):
         """tick_log ana tablo ve default partition'u idempotent şekilde hazırlar."""
         parent_exists = self.query_scalar(

@@ -41,6 +41,8 @@ TRACKER_CONFIG = {
 
     # Partition yönetimi bayrağı
     "enable_partition_mgmt": os.getenv("ENABLE_PARTITION_MGMT", "true").lower() == "true",
+    "enable_pg_cron": os.getenv("ENABLE_PG_CRON", "false").lower() == "true",
+    "pg_cron_schedule": os.getenv("PG_CRON_SCHEDULE", "15 02 * * *"),
 
     # (opsiyonel) flush_sec — sistem bütünlüğü için placeholder, kullanılmıyor
     "flush_sec": int(os.getenv("FLUSH_SEC", 1)),

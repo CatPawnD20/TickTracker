@@ -17,6 +17,8 @@ class Tracker:
         self.retention_days = TRACKER_CONFIG["retention_days"]
         self.precreate_days = TRACKER_CONFIG["precreate_days"]
         self.enable_partition_mgmt = TRACKER_CONFIG.get("enable_partition_mgmt", True)
+        self.enable_pg_cron = TRACKER_CONFIG.get("enable_pg_cron", False)
+        self.pg_cron_schedule = TRACKER_CONFIG.get("pg_cron_schedule", "15 02 * * *")
         self.buf = []
         self.last_msc: int | None = None
         self.db = None
@@ -36,6 +38,13 @@ class Tracker:
                   f"(retention={self.retention_days}d, precreate={self.precreate_days}d)")
             self.db.install_manage_partitions()
             self.db.call_manage_partitions(self.retention_days, self.precreate_days)
+            if self.enable_pg_cron:
+                job_name = self.db.ensure_pg_cron_job(
+                    self.retention_days,
+                    self.precreate_days,
+                    self.pg_cron_schedule,
+                )
+                print(f"[PART] pg_cron job ensured name={job_name} schedule={self.pg_cron_schedule}")
         else:
             print("[PART] partition management disabled by config")
 
