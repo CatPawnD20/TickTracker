@@ -1,0 +1,24 @@
+﻿version: "3.9"
+services:
+  db:
+    build: ./database
+    container_name: ticktracker-postgres
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: serhat-db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    command:
+      - "-c"
+      - "shared_preload_libraries=pg_cron"
+      - "-c"
+      - "timezone=Etc/UTC"
+      - "-c"
+      - "cron.database_name=serhat-db"
+
+volumes:
+  pgdata:
+    external: true
+    name: a386ab8a3aecde632b94e50e842ab0b6b7f8db8a0495c4da42631651b243b885
