@@ -1,5 +1,7 @@
 # TickTracker Docker Kurulum Rehberi
 
+> Not: Aşağıdaki örneklerde kullanılan placeholder değerler `.env` dosyasındaki gerçek bilgilerle değiştirilmeli ve yalnızca oradan yönetilmelidir.
+
 ## Amaç
 PostgreSQL 16’yı `pg_cron` uzantısıyla Docker üzerinde çalıştırmak, var olan veriyi korumak ve günlük cron job’unu UTC 00:00’da çalıştırmak.
 
@@ -48,8 +50,8 @@ services:
     container_name: ticktracker-postgres
     restart: always
     environment:
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: serhat-db
+      POSTGRES_PASSWORD: <POSTGRES_PASSWORD>
+      POSTGRES_DB: <POSTGRES_DB>
     ports:
       - "5432:5432"
     volumes:
@@ -60,7 +62,7 @@ services:
       - "-c"
       - "timezone=Etc/UTC"
       - "-c"
-      - "cron.database_name=serhat-db"
+      - "cron.database_name=<POSTGRES_DB>"
 
 volumes:
   pgdata:
@@ -73,7 +75,7 @@ docker inspect pg16 --format='{{json .Mounts}}'
 ```
 Örnek:
 ```
-"Name":"a386ab8a3aecde632b94e50e842ab0b6b7f8db8a0495c4da42631651b243b885"
+"Name":"<your_volume_id>"
 ```
 
 Sonra compose dosyasında external volume olarak tanımla:
@@ -85,8 +87,8 @@ services:
     container_name: ticktracker-postgres
     restart: always
     environment:
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: serhat-db
+      POSTGRES_PASSWORD: <POSTGRES_PASSWORD>
+      POSTGRES_DB: <POSTGRES_DB>
     ports:
       - "5432:5432"
     volumes:
@@ -97,12 +99,12 @@ services:
       - "-c"
       - "timezone=Etc/UTC"
       - "-c"
-      - "cron.database_name=serhat-db"
+      - "cron.database_name=<POSTGRES_DB>"
 
 volumes:
   pgdata:
     external: true
-    name: a386ab8a3aecde632b94e50e842ab0b6b7f8db8a0495c4da42631651b243b885
+    name: <your_volume_id>
 ```
 
 ---
@@ -127,9 +129,9 @@ docker ps
 ## 6. pg_cron Kurulumu
 Container çalıştıktan sonra:
 ```powershell
-docker exec -it ticktracker-postgres psql -U postgres -d serhat-db -c "CREATE EXTENSION IF NOT EXISTS pg_cron;"
-docker exec -it ticktracker-postgres psql -U postgres -d serhat-db -c "SHOW shared_preload_libraries;"
-docker exec -it ticktracker-postgres psql -U postgres -d serhat-db -c "SHOW timezone;"
+docker exec -it ticktracker-postgres psql -U postgres -d <POSTGRES_DB> -c "CREATE EXTENSION IF NOT EXISTS pg_cron;"
+docker exec -it ticktracker-postgres psql -U postgres -d <POSTGRES_DB> -c "SHOW shared_preload_libraries;"
+docker exec -it ticktracker-postgres psql -U postgres -d <POSTGRES_DB> -c "SHOW timezone;"
 ```
 
 ---
@@ -151,7 +153,7 @@ SELECT * FROM cron.job;
 docker start ticktracker-postgres
 docker stop ticktracker-postgres
 docker logs -f ticktracker-postgres
-docker exec -it ticktracker-postgres psql -U postgres -d serhat-db
+docker exec -it ticktracker-postgres psql -U postgres -d <POSTGRES_DB>
 ```
 
 ---
@@ -185,9 +187,9 @@ type C:\pg_dumpall.sql | docker exec -i ticktracker-postgres psql -U postgres
 ## 12. Minimum Komut Seti
 ```powershell
 docker compose up -d --build
-docker exec -it ticktracker-postgres psql -U postgres -d serhat-db -c "CREATE EXTENSION IF NOT EXISTS pg_cron;"
-docker exec -it ticktracker-postgres psql -U postgres -d serhat-db -c "SHOW shared_preload_libraries;"
-docker exec -it ticktracker-postgres psql -U postgres -d serhat-db -c "SELECT * FROM pg_extension WHERE extname='pg_cron';"
+docker exec -it ticktracker-postgres psql -U postgres -d <POSTGRES_DB> -c "CREATE EXTENSION IF NOT EXISTS pg_cron;"
+docker exec -it ticktracker-postgres psql -U postgres -d <POSTGRES_DB> -c "SHOW shared_preload_libraries;"
+docker exec -it ticktracker-postgres psql -U postgres -d <POSTGRES_DB> -c "SELECT * FROM pg_extension WHERE extname='pg_cron';"
 ```
 
 ---
