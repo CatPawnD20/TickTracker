@@ -49,6 +49,8 @@ TickTracker/
 │   └── check_pg_cron.py
 ├── docker-compose.yml
 ├── dockerHelp.md
+├── .env
+├── env.example
 └── README.md (bu dosya)
 ```
 
