@@ -1,0 +1,58 @@
+﻿CREATE OR REPLACE FUNCTION public.manage_tick_log_partitions(
+    retention_days integer,
+    precreate_days integer
+) RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    now_utc_date   date := (now() AT TIME ZONE 'UTC')::date;
+    keep_from_date date := (now_utc_date - retention_days + 1);
+    create_to_date date := (now_utc_date + precreate_days);
+    d              date;
+    part_name      text;
+    idx_name       text;
+    got_lock       boolean;
+    r record;
+BEGIN
+    got_lock := pg_try_advisory_lock(hashtext('public.manage_tick_log_partitions'));
+    IF NOT got_lock THEN
+        RETURN;
+    END IF;
+
+    -- HATALI: FOR d IN keep_from_date..create_to_date LOOP
+    -- DOĞRU:
+    d := keep_from_date;
+    WHILE d <= create_to_date LOOP
+        part_name := format('tick_log_%s', to_char(d, 'YYYYMMDD'));
+        BEGIN
+            EXECUTE format(
+                'CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.tick_log
+                 FOR VALUES FROM (%L) TO (%L)',
+                 part_name, d::timestamptz, (d + 1)::timestamptz
+            );
+            idx_name := part_name || '_ts_idx';
+            EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON public.%I (ts)', idx_name, part_name);
+        EXCEPTION WHEN duplicate_table THEN NULL;
+        END;
+        d := d + 1;
+    END LOOP;
+
+    FOR r IN
+        SELECT
+            c.relname AS child_name,
+            to_date(substring(c.relname FROM 'tick_log_(\d{8})'), 'YYYYMMDD') AS part_date
+        FROM pg_class c
+        JOIN pg_inherits i ON i.inhrelid = c.oid
+        JOIN pg_class p ON p.oid = i.inhparent
+        WHERE p.relname = 'tick_log'
+          AND c.relnamespace = 'public'::regnamespace
+          AND c.relkind = 'r'
+    LOOP
+        IF r.part_date IS NOT NULL AND r.part_date < keep_from_date THEN
+            EXECUTE format('DROP TABLE IF EXISTS public.%I CASCADE', r.child_name);
+        END IF;
+    END LOOP;
+
+    PERFORM pg_advisory_unlock(hashtext('public.manage_tick_log_partitions'));
+END;
+$$;

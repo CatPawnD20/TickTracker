@@ -9,7 +9,7 @@ class PostgreSQL:
     """PostgreSQL bağlantı yöneticisi ve tick verisi işlem sınıfı."""
 
     def __init__(self):
-        # Config verilerini al
+        # Config
         self.cfg = {
             "host": POSTGRES_CONFIG["host"],
             "port": POSTGRES_CONFIG.get("port", 5432),
@@ -17,9 +17,8 @@ class PostgreSQL:
             "password": POSTGRES_CONFIG["password"],
             "dbname": POSTGRES_CONFIG["dbname"],
             "sslmode": POSTGRES_CONFIG.get("sslmode", "prefer"),
-            "connect_timeout": POSTGRES_CONFIG.get("connect_timeout", 10)
+            "connect_timeout": POSTGRES_CONFIG.get("connect_timeout", 10),
         }
-        # Diğer parametreler
         self.schema = POSTGRES_CONFIG.get("schema", "public")
         self.table = POSTGRES_CONFIG.get("table_name", "tick_log")
         self.page_size = POSTGRES_CONFIG.get("page_size", 1000)
@@ -75,79 +74,95 @@ class PostgreSQL:
         return row[0] if row else None
 
     def commit(self):
-        """Commit işlemi."""
         self.conn.commit()
         print("[DB] commit")
 
     def rollback(self):
-        """Rollback işlemi."""
         self.conn.rollback()
         print("[DB] rollback")
 
     # ---- domain helpers ----
     def ensure_tick_parent(self):
         """tick_log ana tablo ve default partition'u idempotent şekilde hazırlar."""
-        parent_exists = self.query_scalar("""
+        parent_exists = self.query_scalar(
+            """
             SELECT 1
             FROM information_schema.tables
             WHERE table_schema=%s AND table_name=%s
-            """, (self.schema, self.table))
+            """,
+            (self.schema, self.table),
+        )
 
-        default_exists = self.query_scalar("""
+        default_exists = self.query_scalar(
+            """
             SELECT 1
             FROM information_schema.tables
             WHERE table_schema=%s AND table_name=%s
-            """, (self.schema, f"{self.table}_default"))
+            """,
+            (self.schema, f"{self.table}_default"),
+        )
 
         created_any = False
 
         if not parent_exists:
             print(f"[DB] creating parent table {self.schema}.{self.table}")
-            self.execute(f"""
-            CREATE TABLE {self.schema}.{self.table} (
-              id           BIGSERIAL,
-              symbol       TEXT NOT NULL,
-              time_utc     TIMESTAMPTZ NOT NULL,
-              time_msc     BIGINT NOT NULL,
-              bid          NUMERIC(12,3),
-              ask          NUMERIC(12,3),
-              last         NUMERIC(12,3),
-              volume       BIGINT,
-              flags        INT,
-              spread_pts   INT
-            ) PARTITION BY RANGE (time_utc);
-            """)
+            # time_utc = timestamptz ve RANGE(time_utc)
+            self.execute(
+                f"""
+                CREATE TABLE {self.schema}.{self.table} (
+                  id           BIGSERIAL,
+                  symbol       TEXT NOT NULL,
+                  time_utc     TIMESTAMPTZ NOT NULL,
+                  time_msc     BIGINT NOT NULL,
+                  bid          NUMERIC(12,3),
+                  ask          NUMERIC(12,3),
+                  last         NUMERIC(12,3),
+                  volume       BIGINT,
+                  flags        INT,
+                  spread_pts   INT
+                ) PARTITION BY RANGE (time_utc);
+                """
+            )
             created_any = True
         else:
             print(f"[DB] table {self.schema}.{self.table} already exists, skipping creation")
 
-        # Parent-level global UNIQUE (partition key dahil)
-        uq_exists = self.query_scalar("""
+        # Parent-level UNIQUE (partition key dahil)
+        uq_exists = self.query_scalar(
+            """
             SELECT 1
             FROM pg_constraint c
             JOIN pg_class t ON t.oid = c.conrelid
             JOIN pg_namespace n ON n.oid = t.relnamespace
             WHERE n.nspname=%s AND t.relname=%s AND c.conname='uq_tick_global'
-        """, (self.schema, self.table))
+            """,
+            (self.schema, self.table),
+        )
 
         if not uq_exists:
             print(f"[DB] creating global UNIQUE uq_tick_global on {self.schema}.{self.table}")
-            self.execute(f"""
+            self.execute(
+                f"""
                 ALTER TABLE {self.schema}.{self.table}
                 ADD CONSTRAINT uq_tick_global UNIQUE (symbol, time_msc, time_utc);
-            """)
+                """
+            )
             created_any = True
 
         if not default_exists:
             print(f"[DB] creating default partition {self.schema}.{self.table}_default")
-            self.execute(f"""
-            CREATE TABLE {self.schema}.{self.table}_default
-            PARTITION OF {self.schema}.{self.table} DEFAULT;
-            """)
-            self.execute(f"""
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_tick_default
-              ON {self.schema}.{self.table}_default(symbol, time_msc, time_utc);
-            """)
+            self.execute(
+                f"""
+                CREATE TABLE {self.schema}.{self.table}_default
+                PARTITION OF {self.schema}.{self.table} DEFAULT;
+                """
+            )
+            self.execute(
+                f"""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_tick_default
+                  ON {self.schema}.{self.table}_default(symbol, time_msc, time_utc);
+                """
+            )
             created_any = True
         else:
             print(f"[DB] partition {self.schema}.{self.table}_default already exists, skipping creation")
@@ -159,14 +174,19 @@ class PostgreSQL:
             print("[DB] schema already ready; no changes")
 
     def call_manage_partitions(self, retention_days: int, precreate_days: int):
-        """Partition yönetim fonksiyonunu çağırır; yoksa rollback ile sessiz geçer."""
+        """Partition yönetim fonksiyonunu çağırır; sadece 'undefined_function' durumunu yutar."""
         print(f"[DB] managing partitions (keep={retention_days}d, precreate={precreate_days}d)")
         try:
-            self.execute("SELECT public.manage_tick_log_partitions(%s,%s);",
-                         (retention_days, precreate_days))
-        except psycopg2.Error:
+            self.execute("SELECT public.manage_tick_log_partitions(%s,%s);", (retention_days, precreate_days))
+        except psycopg2.Error as e:
+            # 42883 = undefined_function
+            if getattr(e, "pgcode", None) == "42883":
+                self.rollback()
+                print("[DB] partition manager function missing — skipped")
+                return
             self.rollback()
-            print("[DB] partition manager function missing — skipped")
+            print(f"[DB] partition manager error pgcode={getattr(e,'pgcode',None)} detail={getattr(e,'pgerror',None)}")
+            raise
         else:
             self.commit()
 
@@ -176,41 +196,91 @@ class PostgreSQL:
         rows: (symbol, time_utc, time_msc, bid, ask, last, volume, flags, spread_pts)
         """
         count = len(rows)
-        execute_values(self.cur, f"""
+        execute_values(
+            self.cur,
+            f"""
             INSERT INTO {self.schema}.{self.table}
               (symbol, time_utc, time_msc, bid, ask, last, volume, flags, spread_pts)
             VALUES %s
             ON CONFLICT (symbol, time_msc, time_utc) DO NOTHING
-        """, rows, page_size=self.page_size)
+            """,
+            rows,
+            page_size=self.page_size,
+        )
         print(f"[DB] inserted {count} ticks")
 
     def install_manage_partitions(self):
-        """manage_tick_log_partitions fonksiyonunu idempotent şekilde oluşturur."""
-        sql = """
-        CREATE OR REPLACE FUNCTION public.manage_tick_log_partitions(retention_days int, precreate_days int)
-        RETURNS void LANGUAGE plpgsql AS $$
+        """manage_tick_log_partitions fonksiyonunu idempotent oluşturur. RANGE(time_utc) + günlük partition."""
+        sql = r"""
+        CREATE OR REPLACE FUNCTION public.manage_tick_log_partitions(retention_days integer, precreate_days integer)
+        RETURNS void
+        LANGUAGE plpgsql
+        AS $$
         DECLARE
-          d date;
-          part_name text;
+            now_utc_date   date := (now() AT TIME ZONE 'UTC')::date;
+            keep_from_date date := (now_utc_date - retention_days + 1);
+            create_to_date date := (now_utc_date + precreate_days);
+            d              date;
+            part_name      text;
+            idx_name1      text;
+            idx_name2      text;
+            got_lock       boolean;
+            r              record;
         BEGIN
-          -- Gelecek günleri oluştur
-          FOR d IN current_date .. (current_date + precreate_days) LOOP
-            part_name := format('tick_log_%s', to_char(d, 'YYYY_MM_DD'));
-            EXECUTE format(
-              'CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.tick_log
-               FOR VALUES FROM (%L) TO (%L)',
-              part_name, d, d + 1
-            );
-            EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON public.%I(symbol, time_utc)', part_name||'_sym_time', part_name);
-            EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS %I ON public.%I(symbol, time_msc, time_utc)', part_name||'_uq', part_name);
-          END LOOP;
+            -- Çakışmayı önle
+            got_lock := pg_try_advisory_lock(hashtext('public.manage_tick_log_partitions(time_utc)'));
+            IF NOT got_lock THEN
+                RETURN;
+            END IF;
 
-          -- Eski bölümleri düşür
-          FOR d IN date '2000-01-01' .. (current_date - retention_days - 1) LOOP
-            part_name := format('tick_log_%s', to_char(d, 'YYYY_MM_DD'));
-            EXECUTE format('DROP TABLE IF EXISTS public.%I', part_name);
-          END LOOP;
-        END $$;
+            -- Gereken aralıkta günlük partition oluştur
+            d := keep_from_date;
+            WHILE d <= create_to_date LOOP
+                part_name := format('tick_log_%s', to_char(d, 'YYYYMMDD'));
+                BEGIN
+                    EXECUTE format(
+                        'CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.tick_log
+                         FOR VALUES FROM ((%L)::timestamp AT TIME ZONE ''UTC'')
+                                      TO ((%L)::timestamp AT TIME ZONE ''UTC'')',
+                        part_name, d, d + 1
+                    );
+
+                    -- Yerel indeksler
+                    idx_name1 := part_name || '_time_idx';
+                    EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON public.%I (time_utc)', idx_name1, part_name);
+
+                    idx_name2 := part_name || '_uq';
+                    EXECUTE format(
+                        'CREATE UNIQUE INDEX IF NOT EXISTS %I ON public.%I (symbol, time_msc, time_utc)',
+                        idx_name2, part_name
+                    );
+                EXCEPTION
+                    WHEN duplicate_table THEN
+                        NULL;
+                END;
+                d := d + 1;
+            END LOOP;
+
+            -- Eski partisyonları kaldır (isimden gün yakala)
+            FOR r IN
+                SELECT
+                    c.relname AS child_name,
+                    to_date(substring(c.relname FROM 'tick_log_(\d{8})'), 'YYYYMMDD') AS part_date
+                FROM pg_class c
+                JOIN pg_inherits i ON i.inhrelid = c.oid
+                JOIN pg_class p ON p.oid = i.inhparent
+                WHERE p.relname = 'tick_log'
+                  AND c.relnamespace = 'public'::regnamespace
+                  AND c.relkind = 'r'
+            LOOP
+                IF r.part_date IS NOT NULL AND r.part_date < keep_from_date THEN
+                    EXECUTE format('DROP TABLE IF EXISTS public.%I CASCADE', r.child_name);
+                END IF;
+            END LOOP;
+
+            PERFORM pg_advisory_unlock(hashtext('public.manage_tick_log_partitions(time_utc)'));
+        END;
+        $$;
         """
         self.execute(sql)
         self.commit()
