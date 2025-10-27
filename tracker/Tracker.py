@@ -1,10 +1,13 @@
 ﻿# tracker/Tracker.py
 import time
-from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+from datetime import datetime, timezone, timedelta
 import MetaTrader5 as mt5
 from tick.Tick import Tick
 from database.PostgreSQL import PostgreSQL
 from config import MT5_CONFIG, POSTGRES_CONFIG, TRACKER_CONFIG
+
+IST = ZoneInfo("Europe/Istanbul")
 
 
 class Tracker:
@@ -71,32 +74,54 @@ class Tracker:
 
     # ---- Tick collection ----
     def _fetch_ticks(self):
-        tz_local = datetime.now().astimezone().tzinfo
+        now_utc = datetime.now(timezone.utc)
 
         if self.last_msc is None:
-            start_utc = datetime.now(timezone.utc) - timedelta(seconds=3)
+            start_utc = now_utc - timedelta(milliseconds=500)
         else:
             start_utc = datetime.fromtimestamp(self.last_msc / 1000.0, tz=timezone.utc)
 
-        # MT5 çağrısı için: yerel naive
-        start_local_naive = start_utc.astimezone(tz_local).replace(tzinfo=None)
+        # 1) Sunucu zamanını al
+        server_time = mt5.symbol_info_tick("XAUUSD").time
+        server_dt = datetime.fromtimestamp(server_time)
 
-        raw_ticks = mt5.copy_ticks_from(self.symbol, start_local_naive, 100000, mt5.COPY_TICKS_ALL)
-        if raw_ticks is None or len(raw_ticks) == 0:
+        print("Server datetime:", server_dt)
+        print("Local system time:", datetime.now())
+        print("UTC time:", datetime.utcnow())
+
+        si = mt5.symbol_info_tick(self.symbol)
+        broker_last_utc = datetime.fromtimestamp(si.time, tz=timezone.utc) if si else None
+        srv_offset = (broker_last_utc - now_utc) if broker_last_utc else timedelta(0)
+        offset_ms = int(srv_offset.total_seconds() * 1000)
+
+        start_utc_adj = start_utc + srv_offset
+        start_local_naive = start_utc_adj.astimezone(IST).replace(tzinfo=None)
+
+        raw = mt5.copy_ticks_from(self.symbol, start_local_naive, 100000, mt5.COPY_TICKS_ALL)
+        if raw is None or len(raw) == 0:
             return []
 
-        ticks = [
-            Tick(
-                symbol=self.symbol,
-                bid=t['bid'],
-                ask=t['ask'],
-                last=t['last'],
-                volume=t['volume'],
-                flags=t['flags'],
-                time_msc=t['time_msc']
+        ticks = []
+        for t in raw:
+            tm = int(t['time_msc']) - offset_ms
+            if tm < 0:
+                continue
+            ticks.append(
+                Tick(
+                    symbol=self.symbol,
+                    bid=t['bid'],
+                    ask=t['ask'],
+                    last=t['last'],
+                    volume=t['volume'],
+                    flags=t['flags'],
+                    time_msc=tm,
+                )
             )
-            for t in raw_ticks
-        ]
+
+        ticks.sort(key=lambda x: x.time_msc)
+        if self.last_msc is not None:
+            ticks = [tk for tk in ticks if tk.time_msc > self.last_msc]
+
         return ticks
 
     # ---- Database write ----

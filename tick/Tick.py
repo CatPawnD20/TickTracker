@@ -1,4 +1,5 @@
-﻿from datetime import datetime, timezone
+﻿from __future__ import annotations
+from datetime import datetime, timezone
 from config import TICK_CONFIG
 
 
@@ -15,7 +16,9 @@ class Tick:
         self.volume = int(volume)
         self.flags = int(flags)
         self.time_msc = int(time_msc)
-        self.time_utc = datetime.fromtimestamp(time_msc / 1000.0, tz=timezone.utc)
+
+        # UTC-aware datetime (ms epoch → UTC)
+        self.time_utc = self._from_msec_utc(self.time_msc)
 
         self.point = TICK_CONFIG["point"]
         self.spread_round = TICK_CONFIG["spread_round"]
@@ -27,11 +30,21 @@ class Tick:
             self.spread_value = None
             self.spread_pts = None
 
+    @staticmethod
+    def _from_msec_utc(ms: int) -> datetime:
+        """ms epoch → UTC-aware datetime."""
+        return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+
     def to_tuple(self):
         """Veritabanına yazmak için tuple döner."""
+        # Güvenlik: timezone-aware olmalı
+        if self.time_utc.tzinfo is None:
+            # Teorik olarak olmaz; yine de emniyet.
+            self.time_utc = self.time_utc.replace(tzinfo=timezone.utc)
+
         return (
             self.symbol,
-            self.time_utc,
+            self.time_utc,   # TIMESTAMPTZ alanı için uygun
             self.time_msc,
             self.bid,
             self.ask,
