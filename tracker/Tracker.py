@@ -1,13 +1,11 @@
-﻿# tracker/Tracker.py
+# tracker/Tracker.py
 import time
-from zoneinfo import ZoneInfo
 from datetime import datetime, timezone, timedelta
 import MetaTrader5 as mt5
 from tick.Tick import Tick
 from database.PostgreSQL import PostgreSQL
 from config import MT5_CONFIG, POSTGRES_CONFIG, TRACKER_CONFIG
-
-IST = ZoneInfo("Europe/Istanbul")
+from utils import datetime_manager
 
 
 class Tracker:
@@ -25,6 +23,19 @@ class Tracker:
         self.buf = []
         self.last_msc: int | None = None
         self.db = None
+        self.broker_offset: timedelta | None = None
+
+        utc_now = datetime.now(timezone.utc)
+        try:
+            si = mt5.symbol_info_tick(self.symbol)
+        except Exception as exc:  # pragma: no cover - MT5 runtime dependency
+            print(f"[WARN] broker offset read failed during init symbol={self.symbol} err={exc}")
+            si = None
+
+        if si:
+            self.broker_offset = datetime_manager.compute_broker_offset(si.time, utc_now)
+        else:
+            print(f"[WARN] broker offset unavailable during init for symbol={self.symbol}")
 
     # ---- DB & MT5 setup ----
     def _init_db(self):
@@ -76,36 +87,40 @@ class Tracker:
     def _fetch_ticks(self):
         now_utc = datetime.now(timezone.utc)
 
+        if not self._ensure_broker_offset(now_utc):
+            return []
+        offset = self.broker_offset
+        if offset is None:
+            print(f"[WARN] broker offset missing after ensure symbol={self.symbol}")
+            return []
+
         if self.last_msc is None:
             start_utc = now_utc - timedelta(milliseconds=500)
         else:
             start_utc = datetime.fromtimestamp(self.last_msc / 1000.0, tz=timezone.utc)
 
-        # 1) Sunucu zamanını al
-        server_time = mt5.symbol_info_tick("XAUUSD").time
-        server_dt = datetime.fromtimestamp(server_time)
-
-        print("Server datetime:", server_dt)
-        print("Local system time:", datetime.now())
-        print("UTC time:", datetime.utcnow())
-
-        si = mt5.symbol_info_tick(self.symbol)
-        broker_last_utc = datetime.fromtimestamp(si.time, tz=timezone.utc) if si else None
-        srv_offset = (broker_last_utc - now_utc) if broker_last_utc else timedelta(0)
-        offset_ms = int(srv_offset.total_seconds() * 1000)
-
-        start_utc_adj = start_utc + srv_offset
-        start_local_naive = start_utc_adj.astimezone(IST).replace(tzinfo=None)
-
-        raw = mt5.copy_ticks_from(self.symbol, start_local_naive, 100000, mt5.COPY_TICKS_ALL)
+        start_broker = datetime_manager.to_broker_time(start_utc, offset)
+        raw = mt5.copy_ticks_from(
+            self.symbol,
+            start_broker.replace(tzinfo=None),
+            100000,
+            mt5.COPY_TICKS_ALL,
+        )
         if raw is None or len(raw) == 0:
             return []
 
         ticks = []
+        offset_label = datetime_manager.format_offset(offset)
         for t in raw:
-            tm = int(t['time_msc']) - offset_ms
-            if tm < 0:
-                continue
+            broker_ms = int(t['time_msc'])
+            utc_ms = datetime_manager.to_utc_millis(broker_ms, offset)
+            utc_dt = datetime.fromtimestamp(utc_ms / 1000.0, tz=timezone.utc)
+            broker_dt = datetime.fromtimestamp(broker_ms / 1000.0, tz=timezone.utc)
+            print(
+                f"[TICK] [UTC] {utc_dt.isoformat()} "
+                f"[BROKER{offset_label}] {broker_dt.isoformat()} "
+                f"bid={t['bid']} ask={t['ask']} vol={t['volume']}"
+            )
             ticks.append(
                 Tick(
                     symbol=self.symbol,
@@ -114,7 +129,7 @@ class Tracker:
                     last=t['last'],
                     volume=t['volume'],
                     flags=t['flags'],
-                    time_msc=tm,
+                    time_msc=utc_ms,
                 )
             )
 
@@ -123,6 +138,15 @@ class Tracker:
             ticks = [tk for tk in ticks if tk.time_msc > self.last_msc]
 
         return ticks
+
+    def _ensure_broker_offset(self, utc_now: datetime) -> bool:
+        si = mt5.symbol_info_tick(self.symbol)
+        if not si:
+            print(f"[WARN] symbol_info_tick empty for symbol={self.symbol}; skipping fetch")
+            return False
+
+        self.broker_offset = datetime_manager.compute_broker_offset(si.time, utc_now)
+        return True
 
     # ---- Database write ----
     def _flush(self):
