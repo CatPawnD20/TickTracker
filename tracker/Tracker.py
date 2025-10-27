@@ -1,6 +1,6 @@
 ﻿# tracker/Tracker.py
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import MetaTrader5 as mt5
 from tick.Tick import Tick
 from database.PostgreSQL import PostgreSQL
@@ -71,12 +71,33 @@ class Tracker:
 
     # ---- Tick collection ----
     def _fetch_ticks(self):
+        tz_local = datetime.now().astimezone().tzinfo
+
         if self.last_msc is None:
-            start_dt = datetime.utcnow() - timedelta(seconds=3)
-            return mt5.copy_ticks_from(self.symbol, start_dt, 100000, mt5.COPY_TICKS_ALL)
-        # last_msc -> UTC naive datetime
-        start_dt = datetime.utcfromtimestamp(self.last_msc / 1000.0)
-        return mt5.copy_ticks_from(self.symbol, start_dt, 100000, mt5.COPY_TICKS_ALL)
+            start_utc = datetime.now(timezone.utc) - timedelta(seconds=3)
+        else:
+            start_utc = datetime.fromtimestamp(self.last_msc / 1000.0, tz=timezone.utc)
+
+        # MT5 çağrısı için: yerel naive
+        start_local_naive = start_utc.astimezone(tz_local).replace(tzinfo=None)
+
+        raw_ticks = mt5.copy_ticks_from(self.symbol, start_local_naive, 100000, mt5.COPY_TICKS_ALL)
+        if raw_ticks is None or len(raw_ticks) == 0:
+            return []
+
+        ticks = [
+            Tick(
+                symbol=self.symbol,
+                bid=t['bid'],
+                ask=t['ask'],
+                last=t['last'],
+                volume=t['volume'],
+                flags=t['flags'],
+                time_msc=t['time_msc']
+            )
+            for t in raw_ticks
+        ]
+        return ticks
 
     # ---- Database write ----
     def _flush(self):
@@ -99,21 +120,15 @@ class Tracker:
 
         try:
             while True:
-                ticks = self._fetch_ticks()
-                if ticks is not None and ticks.size > 0:
-                    ticks = sorted(ticks, key=lambda x: x.time_msc)
+                ticks = self._fetch_ticks() or []
+                if ticks:
+                    ticks.sort(key=lambda x: x.time_msc)
                     if self.last_msc is not None:
                         ticks = [t for t in ticks if t.time_msc > self.last_msc]
-                    if len(ticks) > 0:
+                    if ticks:
                         self.last_msc = ticks[-1].time_msc
                         for t in ticks:
-                            tk = Tick(
-                                self.symbol,
-                                t.bid, t.ask, t.last,
-                                t.volume_real or t.volume,
-                                t.flags, t.time_msc
-                            )
-                            self.buf.append(tk.to_tuple())
+                            self.buf.append(t.to_tuple())
 
                 if len(self.buf) >= self.batch_size:
                     self._flush()
