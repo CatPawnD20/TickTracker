@@ -87,15 +87,50 @@ class Tracker:
     def _fetch_ticks(self):
         now_utc = datetime.now(timezone.utc)
 
-        if not self._ensure_broker_offset(now_utc):
-            return []
-        offset = self.broker_offset
-        if offset is None:
-            print(f"[WARN] broker offset missing after ensure symbol={self.symbol}")
+        try:
+            server_tick = mt5.symbol_info_tick(self.symbol)
+        except Exception as exc:  # pragma: no cover - MT5 runtime dependency
+            print(f"[WARN] symbol_info_tick failed symbol={self.symbol} err={exc}")
             return []
 
+        if not server_tick:
+            print(f"[WARN] symbol_info_tick empty for symbol={self.symbol}; skipping fetch")
+            return []
+
+        new_offset = datetime_manager.compute_broker_offset(server_tick.time, now_utc)
+        if self.broker_offset is None:
+            self.broker_offset = new_offset
+        else:
+            drift = abs((new_offset - self.broker_offset).total_seconds())
+            if drift >= 1:
+                try:
+                    refreshed_tick = mt5.symbol_info_tick(self.symbol)
+                except Exception as exc:  # pragma: no cover - MT5 runtime dependency
+                    print(f"[WARN] symbol_info_tick refresh failed symbol={self.symbol} err={exc}")
+                    refreshed_tick = None
+                if refreshed_tick:
+                    server_tick = refreshed_tick
+                    now_utc = datetime.now(timezone.utc)
+                    new_offset = datetime_manager.compute_broker_offset(server_tick.time, now_utc)
+
+                old_label = datetime_manager.format_offset(self.broker_offset)
+                new_label = datetime_manager.format_offset(new_offset)
+                self.broker_offset = new_offset
+                print(
+                    f"[INFO] broker offset updated symbol={self.symbol} "
+                    f"old={old_label} new={new_label} drift={drift:.3f}s"
+                )
+
+        offset = self.broker_offset
+        if offset is None:
+            print(f"[WARN] broker offset missing after update symbol={self.symbol}")
+            return []
+
+        last_utc_ms = datetime_manager.to_utc_millis(server_tick.time_msc, offset)
+        broker_last_utc = datetime.fromtimestamp(last_utc_ms / 1000.0, tz=timezone.utc)
+
         if self.last_msc is None:
-            start_utc = now_utc - timedelta(milliseconds=500)
+            start_utc = broker_last_utc - timedelta(milliseconds=500)
         else:
             start_utc = datetime.fromtimestamp(self.last_msc / 1000.0, tz=timezone.utc)
 
@@ -138,15 +173,6 @@ class Tracker:
             ticks = [tk for tk in ticks if tk.time_msc > self.last_msc]
 
         return ticks
-
-    def _ensure_broker_offset(self, utc_now: datetime) -> bool:
-        si = mt5.symbol_info_tick(self.symbol)
-        if not si:
-            print(f"[WARN] symbol_info_tick empty for symbol={self.symbol}; skipping fetch")
-            return False
-
-        self.broker_offset = datetime_manager.compute_broker_offset(si.time, utc_now)
-        return True
 
     # ---- Database write ----
     def _flush(self):
