@@ -2,13 +2,9 @@
 from datetime import datetime, timezone
 from config import TICK_CONFIG
 
-
 class Tick:
-    """MT5'ten gelen tek bir tick verisini temsil eder."""
-
     def __init__(self, symbol: str, bid: float, ask: float,
-                 last: float, volume: float, flags: int,
-                 time_msc: int):
+                 last: float, volume: float, flags: int, time_msc: int):
         self.symbol = symbol
         self.bid = float(bid)
         self.ask = float(ask)
@@ -16,13 +12,10 @@ class Tick:
         self.volume = int(volume)
         self.flags = int(flags)
         self.time_msc = int(time_msc)
-
-        # UTC-aware datetime (ms epoch → UTC)
-        self.time_utc = self._from_msec_utc(self.time_msc)
+        self.time_utc = datetime.fromtimestamp(self.time_msc / 1000.0, tz=timezone.utc)
 
         self.point = TICK_CONFIG["point"]
         self.spread_round = TICK_CONFIG["spread_round"]
-
         if self.ask and self.bid:
             self.spread_value = round(self.ask - self.bid, self.spread_round)
             self.spread_pts = int(round(self.spread_value / self.point))
@@ -30,31 +23,37 @@ class Tick:
             self.spread_value = None
             self.spread_pts = None
 
-    @staticmethod
-    def _from_msec_utc(ms: int) -> datetime:
-        """ms epoch → UTC-aware datetime."""
-        return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
-
-    def to_tuple(self):
-        """Veritabanına yazmak için tuple döner."""
-        # Güvenlik: timezone-aware olmalı
-        if self.time_utc.tzinfo is None:
-            # Teorik olarak olmaz; yine de emniyet.
-            self.time_utc = self.time_utc.replace(tzinfo=timezone.utc)
-
-        return (
-            self.symbol,
-            self.time_utc,   # TIMESTAMPTZ alanı için uygun
-            self.time_msc,
-            self.bid,
-            self.ask,
-            self.last,
-            self.volume,
-            self.flags,
-            self.spread_pts
+    @classmethod
+    def from_mt5_row(cls, row, symbol: str, offset_ms: int) -> "Tick | None":
+        # numpy.void veya dict fark etmeksizin [] ile eriş
+        tm = int(row["time_msc"]) - offset_ms
+        if tm < 0:
+            return None
+        return cls(
+            symbol=symbol,
+            bid=float(row["bid"]),
+            ask=float(row["ask"]),
+            last=float(row["last"]),
+            volume=int(row["volume"]),
+            flags=int(row["flags"]),
+            time_msc=tm,
         )
 
-    def __repr__(self):
-        return (f"<Tick {self.symbol} {self.time_utc.isoformat()} "
-                f"bid={self.bid} ask={self.ask} "
-                f"spread={self.spread_pts}pts ({self.spread_value})>")
+    def to_tuple(self):
+        """DB insert tuple'ı. time_utc TIMESTAMPTZ olmalı."""
+        dt = self.time_utc
+        if dt.tzinfo is None:
+            from datetime import timezone
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        return (
+            self.symbol,  # TEXT
+            dt,  # TIMESTAMPTZ
+            self.time_msc,  # BIGINT
+            self.bid,  # DOUBLE PRECISION
+            self.ask,  # DOUBLE PRECISION
+            self.last,  # DOUBLE PRECISION
+            self.volume,  # BIGINT/INT
+            self.flags,  # INT
+            self.spread_pts  # INT (nullable değilse 0 koyabilirsiniz)
+        )
