@@ -74,6 +74,22 @@ class Tracker:
 
         print(f"[INIT] MT5 ready symbol={self.symbol} path={MT5_CONFIG.get('path')!r}")
 
+    def _init_mt4(self):
+        ok = mt4.initialize(
+            path=MT4_CONFIG.get("path"),
+            login=MT4_CONFIG.get("login", 0),
+            password=MT4_CONFIG.get("password", ""),
+            server=MT4_CONFIG.get("server", "")
+        )
+        if not ok:
+            code, msg = mt4.last_error()
+            raise RuntimeError(f"MT4 init failed ({code}): {msg}")
+        si = mt4.symbol_info(self.symbol)
+        if not si or not si.visible:
+            if not mt4.symbol_select(self.symbol, True):
+                raise RuntimeError(f"symbol_select failed: {self.symbol}")
+        print(f"[INIT] MT4 ready symbol={self.symbol} path={MT4_CONFIG.get('path')!r}")
+
     # ---- Tick collection ----
     def _fetch_ticks(self):
         _, start_local_naive, offset_ms = datetime_manager.prepare_time_window(mt5, self.last_msc, self.symbol)

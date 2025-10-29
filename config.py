@@ -12,6 +12,15 @@ MT5_CONFIG = {
     "symbol": os.getenv("MT5_SYMBOL", "XAUUSD"),
 }
 
+# --- PostgreSQL parametreleri ---
+MT4_CONFIG = {
+    "login": int(os.getenv("MT4_LOGIN", 0)),
+    "password": os.getenv("MT4_PASSWORD", ""),
+    "server": os.getenv("MT4_SERVER", ""),
+    "path": os.getenv("MT4_PATH", ""),
+    "symbol": os.getenv("MT4_SYMBOL", "XAUUSD"),
+}
+
 POSTGRES_CONFIG = {
     "host": os.getenv("POSTGRES_HOST", "127.0.0.1"),
     "port": int(os.getenv("POSTGRES_PORT", 5432)),
