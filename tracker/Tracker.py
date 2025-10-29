@@ -78,6 +78,19 @@ class Tracker:
     def _fetch_ticks(self):
         _, start_local_naive, offset_ms = datetime_manager.prepare_time_window(mt5, self.last_msc, self.symbol)
         raw = mt5.copy_ticks_from(self.symbol, start_local_naive, 100000, mt5.COPY_TICKS_ALL)
+        '''
+        # Point bilgisi
+        p = mt5.symbol_info(self.symbol).point
+
+        # Anlık tick verisi
+        t = mt5.symbol_info_tick(self.symbol)
+
+        # Spread hesaplama
+        spread_points = (t.ask - t.bid) / p
+
+        print(f"Spread = {spread_points:.0f} points")
+        '''
+
         if raw is None or len(raw) == 0:
             return []
         return normalize_ticks(raw, offset_ms, self.symbol, self.last_msc)
